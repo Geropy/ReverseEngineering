@@ -43,6 +43,8 @@ using namespace std;
 
 // This is definitely enough for me to start
 
+
+
 int main()
 {
     int firstInitInput;
@@ -56,6 +58,9 @@ int main()
 	cerr << numInputs << endl;
 
 	bool flip = false;
+
+	vector<string> moves{ "A", "A", "C" };
+	int idx = 0;
 
     // game loop
     while (1) {
@@ -83,10 +88,16 @@ int main()
 
         }
 
-
-
-		string answer = flip ? "A" : "E";
-		cout << "A" << endl;
-		flip = !flip;
+		string answer;
+		if (idx < moves.size())
+		{
+			answer = moves[idx];
+		}
+		else
+		{
+			answer = "E";
+		}
+		cout << answer << endl;
+		idx++;
     }
 }
