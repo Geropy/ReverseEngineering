@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <chrono>
 
 using namespace std;
 
@@ -53,6 +54,24 @@ You can go through the board, from first col to last col for example, like pacma
 enum Direction { UP, DOWN, LEFT, RIGHT, NONE };
 enum SquareType { WALL, OPEN, UNKNOWN };
 
+static clock_t start;
+
+struct Move
+{
+	Direction dir;
+	float score;
+
+	Move(Direction dir, float score)
+		: dir(dir)
+		, score(score)
+	{}
+
+	Move()
+		: dir(NONE)
+		, score(0.0f)
+	{}
+};
+
 struct Square
 {
 	SquareType type;
@@ -75,9 +94,11 @@ struct Board
 	array<int, 2> myPos;
 	vector<array<int, 2>> enemies;
 	vector<vector<Square>> grid;
+	float currentScore;
 
 	Board(int rows, int cols)
 		: myPos({ {-1, -1} })
+		, currentScore(0.0f)
 	{
 		for (int i = 0; i < rows; i++)
 		{
@@ -85,44 +106,39 @@ struct Board
 		}
 	}
 
-	array<int, 2> getNewSquare(Direction dir)
+	array<int, 2> getNewSquare(Direction dir, const array<int,2> & init)
 	{
-		int newRow, newCol;
 
 		switch (dir)
 		{
 		case UP:
-			newRow = myPos[0] > 0 ? myPos[0] - 1 : grid.size() - 1;
-			newCol = myPos[1];
-			break;
+			return { { init[0] > 0 ? init[0] - 1 : grid.size() - 1 , init[1] } };
 		case DOWN:
-			newRow = myPos[0] < grid.size() - 1 ? myPos[0] + 1 : 0;
-			newCol = myPos[1];
-			break;
+			return { { init[0] < grid.size() - 1 ? init[0] + 1 : 0 , init[1] } };
 		case LEFT:
-			newRow = myPos[0];
-			newCol = myPos[1] > 0 ? myPos[1] - 1 : grid[0].size() - 1;
-			break;
+			return { { init[0] , init[1] > 0 ? init[1] - 1 : grid[0].size() - 1 } };
 		case RIGHT:
-			newRow = myPos[0];
-			newCol = myPos[1] < grid[0].size() - 1 ? myPos[1] + 1 : 0;
-			break;
+			return { { init[0] , init[1] < grid[0].size() - 1 ? init[1] + 1 : 0 } };
 		default:
-			break;
+			return { {init[0], init[1]} };
 		}
 
-		return { {newRow, newCol} };
 	}
 
 	void setSquareType(Direction dir, SquareType type)
 	{
-		array<int, 2> newPos = getNewSquare(dir);	
+		array<int, 2> newPos = getNewSquare(dir, myPos);	
 		grid[newPos[0]][newPos[1]].type = type;
 	}
 
 	void setVisited()
 	{
-		grid[myPos[0]][myPos[1]].visited = true;
+		Square& sq = grid[myPos[0]][myPos[1]];
+		if (sq.visited = false)
+		{
+			currentScore += 2.0f;
+			sq.visited = true;
+		}
 	}
 
 	void setEnemySquareTypes()
@@ -136,7 +152,7 @@ struct Board
 	int getScore(Direction dir)
 	{
 		int score = 0;
-		array<int, 2> newPos = getNewSquare(dir);
+		array<int, 2> newPos = getNewSquare(dir, myPos);
 
 		Square& newSquare = grid[newPos[0]][newPos[1]];
 		if (newSquare.type == WALL) { return -100; }
@@ -157,6 +173,150 @@ struct Board
 			}
 		}
 
+		return score;
+
+	}
+
+	Move getBestMove()
+	{
+		int depth = 1;
+		Move bestMove ;
+		while ((clock() - start) / (double)(CLOCKS_PER_SEC / 1000) < 20.0)
+		{
+			bestMove = dfs(depth);
+			depth++;
+			//cerr << depth << endl;
+		}
+
+		return bestMove;
+	}
+
+	Move dfs(int depth)
+	{
+		if (depth == 0)
+		{
+			//Score the position
+			return Move(NONE, getHeuristicScore());
+		}
+
+		// For now, don't order the exploration
+		// Leave out blocked moves
+		array<int, 2> myInitPos = myPos;
+		float initScore = currentScore;
+		auto initEnemies = enemies;
+		float maxScore = -9999.0f;
+		Move bestMove;
+
+		for (int i = 0; i < 4; i++)
+		{
+			Direction dir = (Direction)(i);
+			array<int, 2> newPos = getNewSquare(dir, myPos);
+			Square* square = &grid[newPos[0]][newPos[1]];
+			bool currVisit = square->visited;
+			if (square->type != WALL)
+			{
+				// Advance
+				myPos = newPos;
+				if (!square->visited)
+				{
+					currentScore += 2.0f;
+					square->visited = true;
+				}
+				
+				float score = advanceEnemies() ? dfs(depth - 1).score : getHeuristicScore();	
+
+				if (score > maxScore)
+				{
+					maxScore = score;
+					bestMove = Move(dir, score);
+				}
+
+				// Reset
+				myPos = myInitPos;
+				enemies = initEnemies;
+				currentScore = initScore;
+				square->visited = currVisit;
+			}
+		}
+
+		// Test staying still
+		float score = advanceEnemies() ? dfs(depth - 1).score : getHeuristicScore();
+		if (score > maxScore)
+		{
+			maxScore = score;
+			bestMove = Move(NONE, score);
+		}
+
+		enemies = initEnemies;
+
+		return bestMove;
+	}
+
+	bool advanceEnemies()
+	{
+		// Advance enemies
+		// Minimal enemy prediction for now
+		for (auto& enemy : enemies)
+		{
+			// Assume every unknown square is open
+			int minDist = dist(enemy[0], enemy[1], myPos[0], myPos[1]);
+			if (minDist == 0)
+			{
+				// I've hit this enemy, I get 100 points, the enemy doesn't move, game over
+				currentScore += 100.0f;
+				return false;
+			}
+			array<int, 2> bestSquare = enemy;
+
+			for (int i = 0; i < 4; i++)
+			{
+				array<int, 2> newSquare = getNewSquare((Direction)(i), enemy);
+				if (grid[newSquare[0]][newSquare[1]].type != WALL)
+				{
+					int distance = dist(newSquare[0], newSquare[1], myPos[0], myPos[1]);
+					if (distance == 0)
+					{
+						// The enemy hits me, game over
+						return false;
+					}
+					if (distance < minDist)
+					{
+						bestSquare = newSquare;
+						minDist = distance;
+					}
+				}
+			}
+
+			enemy = bestSquare;
+		}
+
+		return true;
+	}
+
+	float getHeuristicScore() const
+	{
+		// Obviously based on current score
+		float score = currentScore;
+
+		// If I share a square with an enemy, this is obviously a big loss
+		// I want to be far from enemies
+		int totalDist = 0;
+		for (auto& enemy : enemies)
+		{
+			int distance = dist(myPos[0], myPos[1], enemy[0], enemy[1]);
+			if (distance == 0)
+			{
+				score -= 100.0f;
+				break;
+			}
+
+			else
+			{
+				totalDist += distance;
+			}
+		}
+
+		score += (float)(totalDist) / 150.0f;
 		return score;
 
 	}
@@ -192,6 +352,8 @@ int main()
 
 	// game loop
 	while (1) {
+		start = clock();
+		
 		string firstInput;
 		getline(cin, firstInput);
 		cerr << firstInput << endl;
@@ -238,36 +400,8 @@ int main()
 		board.setVisited();
 		board.setEnemySquareTypes();
 
-		// Simple heuristic to start
-		// Move to an open square, prefer those that are not occupied by an enemy, and unvisited
-		Direction bestDirection;
-		int bestScore = -999;
-		int score = board.getScore(LEFT);
-		if (score > bestScore)
-		{
-			bestScore = score;
-			bestDirection = LEFT;
-		}
-		score = board.getScore(RIGHT);
-		if (score > bestScore)
-		{
-			bestScore = score;
-			bestDirection = RIGHT;
-		}
-		score = board.getScore(UP);
-		if (score > bestScore)
-		{
-			bestScore = score;
-			bestDirection = UP;
-		}
-		score = board.getScore(DOWN);
-		if (score > bestScore)
-		{
-			bestScore = score;
-			bestDirection = DOWN;
-		}
+		Move bestMove = board.getBestMove();
 
-
-		cout << outputMap[bestDirection] << endl;
+		cout << outputMap[bestMove.dir] << endl;
 	}
 }
